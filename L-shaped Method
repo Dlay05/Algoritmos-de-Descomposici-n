@@ -1,0 +1,150 @@
+import numpy as np
+from scipy.optimize import linprog
+
+
+# =================================================
+#                First Stage Data
+# =================================================
+
+c0=[41,15,243,308,0,0,1033,0,0,0,0,0]       
+n1=len(c0)
+A=[[2.8,3.0,0,0,0,0,1,-1,0,0,0,0],        
+  [1,0,1,0,1,0,0, 0,0,0,0,0],
+  [0,1,0,1,0,1,0, 0,0,0,0,0],
+  [0,0,0,0,1,0,0, 0,1,0,0,0],
+  [0,0,0,0,0,1,0, 0,0,1,0,0],
+  [1,0,0,0,0,0,0, 0,0,0,1,0],
+  [0,1,0,0,0,0,0, 0,0,0,0,1]]               
+b=[50,57,49,60,50,10,12]                     
+bound=[(0, float("inf")) for i in range(n1)] 
+
+# =================================================
+#                Second Stage Data
+# =================================================
+
+q =c0                                          
+T1=[[0,0,0,0,0, 0,0,0,0,0,0,0],                 
+    [0,0,0,0,-1,0,0,0,0,0,0,0],
+    [0,0,0,0,0,-1,0,0,0,0,0,0]]
+T =np.concatenate((T1,np.zeros((4,12))),axis=0) 
+W =A                                           
+h =[[67,209,30,60,50,10,12],                    
+    [67,109,12,60,50,10,12],                   
+    [67,4 ,5 ,60,50,10,12]]                    
+p =[0.6,0.3,0.1]                               
+
+# =================================================
+#                Define RHS vector h-Tx
+# =================================================
+
+def RHSFC(s,x):                                 
+    N=np.dot(T,x)
+    RHS=[]
+    for i in range(7):
+        RHS.append(N[i]-h[s][i])                
+    return np.round(RHS,2)
+
+# =================================================
+#    Subproblem to generate Feasiblity Cuts
+# =================================================
+
+o1,o2=np.zeros(n1),np.ones(7)
+I  =np.identity(7)
+obj=np.concatenate((o1,o2,o2),axis=0)               
+Z  =np.concatenate(((W,I,-1*I)),axis=1)         
+Zt =np.transpose(Z)
+bnd=[(-1*float("inf"), float("inf")) for i in range(7)]
+
+def dualFC(s,x):                                
+    dual = linprog(c=RHSFC(s,x),A_ub=Zt,b_ub=obj,
+          bounds=bnd,method="interior-point")
+    return [np.round(dual.x,2),np.round(dual.fun,2)]
+
+def CHECK(s,x):                                     
+    if dualFC(s,x)[1]!=0:
+        return False
+    else:
+        return True
+# =================================================
+#      Subproblem to generate Optimality Cuts
+# =================================================
+
+Wt=np.transpose(W)                               
+def optimal(s,x):
+    opti = linprog(c=RHSFC(s,x),A_ub=Wt,b_ub=q,
+          bounds=bnd,method="interior-point")
+    return np.round(opti.x,2)
+
+# =================================================
+#                First Master Problem
+# =================================================
+
+Master1 = linprog(c=c0,A_eq=A,b_eq=b,                    #dual    no cuts:θ=0
+          bounds=bound,method="interior-point")
+
+print(np.round(Master1.x,2))
+
+# =================================================
+#                L-Shaped Algorithm
+# =================================================
+
+def Lshaped(x,te):
+    s=0
+    m = True
+    while m != False and s<len(h):
+        m=CHECK(s,x)   
+        s=s+1
+    
+    if m == True:
+        vec1=[]
+        vec2=[]
+        for j in range(len(h)):
+            vec1.append(np.dot(optimal(j,x),T))
+            vec2.append(np.dot(optimal(j,x),h[j]))
+        E=np.round(np.dot(p,vec1),2)
+        E2=np.concatenate((E,[1]),axis=0)
+        e=np.round(np.dot(p,vec2),2)
+
+        if np.round(te,2)>= np.round(e-np.dot(E,x),2):
+            print("=================================================")
+            print("First-stage opt:",np.round(x,2))
+            return 100000
+        else:
+            return [[E2],[e]]
+        
+    else:
+        s=s-1
+        sigma=dualFC(s,x)[0]
+        D=np.round(np.concatenate((np.dot(sigma,T),[0]),axis=0),2)
+        d=np.round(np.dot(sigma,h[s]),2)
+#        s,m=0,True
+        
+        return [[D],[d]]   
+    
+# =================================================
+#                Iterations
+# =================================================      
+Cons=[np.zeros(len(c0)+1)]
+cmas=[0]
+c1=np.concatenate((c0,[1]),axis=0)
+a0=[[0] for i in range(len(A))]
+A1=np.concatenate((A,a0),axis=1)
+bn1=[(-1*float("inf"),float("inf"))]
+bnd2=np.concatenate((bound,bn1),axis=0)
+tee=-1*float("inf")
+it=0
+
+Master1=Master1.x
+
+while Lshaped(Master1,tee)!=100000: 
+    MasterLHS=np.concatenate((Cons,Lshaped(Master1,tee)[0]),axis=0)
+    MasterRHS=np.concatenate((cmas,Lshaped(Master1,tee)[1]),axis=0)
+    Sol=linprog(c=c1,A_ub=np.multiply(MasterLHS,-1),
+            b_ub=np.multiply(MasterRHS,-1),
+            A_eq=A1,b_eq=b,bounds=bnd2)
+    Cons=MasterLHS
+    cmas=MasterRHS
+    Master1=Sol.x[0:len(Sol.x)-1]
+    tee=Sol.x[len(Sol.x)-1]
+    it=it+1
+    print(it)
