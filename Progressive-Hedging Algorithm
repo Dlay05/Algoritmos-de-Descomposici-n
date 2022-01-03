@@ -1,0 +1,96 @@
+import numpy as np
+from scipy.optimize import linprog
+import cvxopt
+from numpy import array, dot
+from qpsolvers import solve_qp
+
+#========================================================
+#                 Scenario Subproblems
+#========================================================
+
+c=[41,15,243,308,1033]
+n=len(c)
+cs=2*c
+Gs=np.array([[-2.8, -3,  0,  0, -1,   0,  0,  0,  0,  0],
+    [   0,  0,  0,  0,  0,-2.8, -3,  0,  0, -1],
+    [  -1,  0, -1,  0,  0,   0,  0,  0,  0,  0],
+    [   1,  0,  1,  0,  0,   0,  0,  0,  0,  0],
+    [  -1,  0, -1,  0,  0,  -1,  0, -1,  0,  0],
+    [   1,  0,  1,  0,  0,   1,  0,  1,  0,  0],
+    [   0, -1,  0, -1,  0,   0,  0,  0,  0,  0],
+    [   0,  1,  0,  1,  0,   0,  0,  0,  0,  0],
+    [   0, -1,  0, -1,  0,   0, -1,  0, -1,  0],
+    [   0,  1,  0,  1,  0,   0,  1,  0,  1,  0]])
+
+hs=[[-50,-67,3,57,3-209,57+209,1,49,1-30,49+30],
+    [-50,-67,3,57,3-109,57+109,1,49,1-12,49+12],
+    [-50,-67,3,57,3-4  ,57+4  ,1,49,1-5 ,49+5 ]]
+
+lb=np.zeros(len(cs))
+lu=2*[10,12,float('inf'),float('inf'),float('inf')]
+p=[0.6,0.3,0.10]
+
+#========================================================
+#                Optimal Initial Policy
+#========================================================
+
+I=np.identity(len(cs))
+bnd=[(lb[i],lu[i]) for i in range(len(cs))]
+x0=[np.zeros(len(cs)) for i in range(len(p))]
+for i in range(len(p)):
+    opt =linprog(c=cs, A_ub=Gs, b_ub=hs[i],
+                 bounds=bnd,method="interior-point")
+    x0[i]=np.round(opt.x,2)
+
+
+#========================================================
+#                 Aggregation Operator
+#========================================================
+
+def J(x):
+    xsomb=[[],[],[]]
+    bundles=[x[s][0:n] for s in range(len(p))]
+    for j in range(len(p)):
+        xsomb[j][0:n]=np.dot(p,bundles)
+        xsomb[j][n:len(cs)]=x[j][n:len(cs)]
+    return xsomb
+
+print(np.round(J(x0),2))
+#========================================================
+#               Progressive Hedging Algorithm
+#========================================================
+r=4
+k=0
+
+x0=[np.zeros(len(cs)) for i in range(len(p))]
+w0=[np.zeros(len(cs)) for i in range(len(p))]
+xad=w0
+vecKX=[]
+lbound=np.array(np.zeros(len(cs)))
+lupper=np.array(2*[10,12,float("inf"),float("inf"),float("inf")])
+KX=1
+print("If we choose the optimal initial policy ")
+print("========================================")
+while KX!=0:
+    for i in range(len(p)):
+        modified=np.array([cs[j]+w0[i][j]-r*J(x0)[i][j] for j in range(len(cs))])
+        xad[i]=solve_qp(P=r*I,q=modified,G=Gs,h=hs[i],A=None,b=None,lb=lbound,ub=lupper)
+    
+    x0=xad
+    x00=J(x0)
+    waux=[np.zeros(len(cs)) for i in range(len(p))]
+    for i in range(len(p)):
+        waux[i]=[w0[i][j]+r*(x0[i][j]-x00[i][j]) for j in range(len(cs))]
+        w0=waux
+        
+    z=np.zeros(len(p))
+    for i in range(len(p)):
+        xx=np.array(x0[i])
+        yy=np.array(x00[i])
+        z[i]=np.linalg.norm(xx-yy)**2
+        
+    KX=np.round(np.dot(p,z),3)
+    vecKX.append(KX)
+    print('Iteration',k,':||KX||²=',KX)
+    k=k+1
+print(np.round(J(x0),2))
